@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ANAN Voice & Video Call</title>
+  <!-- GitHub Pages: save this file as index.html in the repository root. -->
+  <!-- Background Signaling & Live Presence Engine -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #e5ddd5; margin: 0; }
+    .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); margin-bottom: 15px; }
+    .hidden { display: none !important; }
+    input { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; font-size: 16px; }
+    button { width: 100%; padding: 12px; font-weight: bold; border: none; border-radius: 6px; cursor: pointer; margin-top: 8px; font-size: 16px; }
+    
+    .id-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+    .id-btn { flex: 1 1 42%; background: #f0f0f0; color: #333; border: 2px solid #ccc; border-radius: 8px; font-weight: bold; padding: 14px; text-align: center; cursor: pointer; }
+    .id-btn.selected { background: #075E54; color: white; border-color: #075E54; }
+    .online-indicator { width: 10px; height: 10px; background-color: #25D366; border-radius: 50%; display: inline-block; margin-right: 6px; }
+
+    .call-btn-container { display: flex; gap: 10px; margin-top: 15px; }
+    .btn-voice { background: #25D366; color: white; flex: 1; margin-top: 0; font-size: 16px; }
+    .btn-video { background: #075E54; color: white; flex: 1; margin-top: 0; font-size: 16px; }
+
+    .btn-end { background: #dc3545; color: white; margin-top: 0; font-size: 16px; flex: 1; }
+    .btn-ctrl { background: #555; color: white; font-size: 16px; flex: 1; margin-top: 0; }
+    .btn-accept { background: #28a745; color: white; width: 48%; }
+    .btn-decline { background: #dc3545; color: white; width: 48%; }
+    #incoming-modal { background: #fff3cd; border: 2px solid #ffeeba; text-align: center; }
+    .empty-state { color: #888; font-style: italic; font-size: 14px; margin: 10px 0; }
+
+    /* Video Player Layout */
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      height: 380px;
+      background: #111;
+      border-radius: 12px;
+      overflow: hidden;
+      margin-top: 15px;
+    }
+
+    #remote-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    #local-video {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 110px;
+      height: 150px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 2px solid #fff;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+      background: #222;
+    }
+
+    .controls-bar {
+      display: flex;
+      gap: 8px;
+      margin-top: 15px;
+    }
+
+    @media (max-width: 520px) {
+      body { padding: 12px; }
+      .card { padding: 15px; }
+      .video-wrapper { height: 300px; }
+      #local-video { width: 86px; height: 118px; }
+      .controls-bar, .call-btn-container { flex-wrap: wrap; }
+      .controls-bar button, .call-btn-container button { min-width: 30%; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2 style="margin:0 0 10px 0;">Calling App</h2>
+    <p style="margin:0;">Status: <strong id="status-text" style="color: #d9534f;">Disconnected</strong></p>
+  </div>
+
+  <!-- Step 1: Type Your Own ID -->
+  <div id="login-card" class="card">
+    <h3>1. Enter Your Phone ID</h3>
+    <input type="text" id="my-id-input" placeholder="Type your custom ID here...">
+    <button class="btn-voice" style="width: 100%; font-size: 18px; padding: 12px; margin-top: 5px;" onclick="registerUser()">Connect</button>
+  </div>
+
+  <!-- Step 2: Live Online Users -->
+  <div id="call-card" class="card hidden">
+    <p>Logged in as: <strong id="display-id" style="color: #075E54;"></strong></p>
+    <h3>2. Online Users</h3>
+    <p style="font-size: 13px; color: #666; margin-top:-5px;">Select an online device to start a call:</p>
+    
+    <div id="online-users-container" class="id-grid"></div>
+    <div id="no-users-msg" class="empty-state">Searching for other active devices...</div>
+
+    <!-- Dual Call Action Buttons -->
+    <div id="call-actions-container" class="call-btn-container hidden">
+      <button id="voice-call-btn" class="btn-voice" onclick="makeCall('voice')">Voice Call</button>
+      <button id="video-call-btn" class="btn-video" onclick="makeCall('video')">Video Call</button>
+    </div>
+
+    <!-- Active Call View and Controls -->
+    <div id="active-call-container" class="hidden">
+      <div id="video-wrapper" class="video-wrapper hidden">
+        <video id="remote-video" autoplay playsinline></video>
+        <video id="local-video" autoplay playsinline muted></video>
+      </div>
+      <div class="controls-bar">
+        <button id="toggle-cam-btn" class="btn-ctrl" onclick="toggleCamera()">Mute Video</button>
+        <button id="toggle-mic-btn" class="btn-ctrl" onclick="toggleMic()">Mute Mic</button>
+        <button id="end-call-btn" class="btn-end" onclick="endCall()">End Call</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Incoming Call Modal -->
+  <div id="incoming-modal" class="card hidden">
+    <p style="margin: 0; font-size: 12px; color: #777; font-weight: bold;">INCOMING CALL FROM</p>
+    <h2 id="caller-id-display" style="margin: 5px 0 15px 0; color: #075E54; font-size: 26px;">Caller ID</h2>
+    
+    <div style="display: flex; justify-content: space-between;">
+      <button class="btn-accept" onclick="acceptCall()">Accept</button>
+      <button class="btn-decline" onclick="declineCall()">Decline</button>
+    </div>
+  </div>
+
+  <audio id="remote-audio" autoplay playsinline class="hidden"></audio>
+
+  <script>
+    let peer = null;
+    let mqttClient = null;
+    let localStream = null;
+    let incomingCall = null;
+    let currentCall = null;
+    let myId = null;
+    let selectedTargetId = null;
+
+    let isVideoEnabled = true;
+    let isAudioEnabled = true;
+
+    const activePeers = {};
+    const MQTT_TOPIC = 'voice_app_presence_v5/heartbeat';
+
+    const statusText = document.getElementById('status-text');
+    const remoteVideo = document.getElementById('remote-video');
+    const localVideo = document.getElementById('local-video');
+    const remoteAudio = document.getElementById('remote-audio');
+    const videoWrapper = document.getElementById('video-wrapper');
+    const activeCallContainer = document.getElementById('active-call-container');
+    const callActionsContainer = document.getElementById('call-actions-container');
+
+    async function registerUser() {
+      const inputId = document.getElementById('my-id-input').value.trim();
+      if (!inputId) return alert('Type an ID first');
+
+      myId = inputId;
+      statusText.innerText = `Connecting as "${myId}"...`;
+      statusText.style.color = '#f0ad4e';
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        localVideo.srcObject = localStream;
+      } catch (err) {
+        statusText.innerText = 'Camera/Microphone Blocked';
+        statusText.style.color = '#d9534f';
+        return alert('Camera/microphone access was blocked. Open this site using its HTTPS GitHub Pages link and allow camera/microphone permissions.');
+      }
+
+      peer = new Peer(myId, { debug: 1 });
+
+      peer.on('open', (id) => {
+        document.getElementById('display-id').innerText = id;
+        document.getElementById('login-card').classList.add('hidden');
+        document.getElementById('call-card').classList.remove('hidden');
+        statusText.innerText = 'Online & Ready';
+        statusText.style.color = '#25D366';
+
+        initPresenceDiscovery();
+      });
+
+      peer.on('call', (call) => {
+        incomingCall = call;
+        document.getElementById('caller-id-display').innerText = call.peer;
+        document.getElementById('incoming-modal').classList.remove('hidden');
+        statusText.innerText = 'Ringing...';
+      });
+
+      peer.on('error', (err) => {
+        statusText.style.color = '#d9534f';
+        if (err.type === 'unavailable-id') {
+          statusText.innerText = `ID "${myId}" is already online on another device!`;
+        } else {
+          statusText.innerText = 'Error: ' + err.type;
+        }
+      });
+    }
+
+    function initPresenceDiscovery() {
+      mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+
+      mqttClient.on('connect', () => {
+        mqttClient.subscribe(MQTT_TOPIC);
+
+        setInterval(() => {
+          if (myId && mqttClient) {
+            mqttClient.publish(MQTT_TOPIC, JSON.stringify({ id: myId, time: Date.now() }));
+          }
+        }, 1000);
+
+        setInterval(sweepOfflineUsers, 1000);
+      });
+
+      mqttClient.on('message', (topic, message) => {
+        try {
+          const data = JSON.parse(message.toString());
+          if (data.id && data.id !== myId) {
+            activePeers[data.id] = Date.now();
+            renderOnlineUsers();
+          }
+        } catch (e) {}
+      });
+    }
+
+    function sweepOfflineUsers() {
+      const now = Date.now();
+      let changed = false;
+
+      for (const peerId in activePeers) {
+        if (now - activePeers[peerId] > 3000) {
+          delete activePeers[peerId];
+          if (selectedTargetId === peerId) {
+            selectedTargetId = null;
+            callActionsContainer.classList.add('hidden');
+          }
+          changed = true;
+        }
+      }
+
+      if (changed) renderOnlineUsers();
+    }
+
+    function renderOnlineUsers() {
+      const container = document.getElementById('online-users-container');
+      const emptyMsg = document.getElementById('no-users-msg');
+      const liveUserIds = Object.keys(activePeers);
+
+      container.innerHTML = '';
+
+      if (liveUserIds.length === 0) {
+        emptyMsg.classList.remove('hidden');
+        return;
+      }
+
+      emptyMsg.classList.add('hidden');
+
+      liveUserIds.forEach(id => {
+        const btn = document.createElement('button');
+        btn.className = 'id-btn';
+        if (id === selectedTargetId) btn.classList.add('selected');
+
+        btn.innerHTML = `<span class="online-indicator"></span>${id}`;
+        btn.onclick = () => selectTargetId(id, btn);
+        container.appendChild(btn);
+      });
+    }
+
+    function selectTargetId(id, btnElement) {
+      selectedTargetId = id;
+
+      document.querySelectorAll('#online-users-container .id-btn').forEach(b => b.classList.remove('selected'));
+      btnElement.classList.add('selected');
+
+      callActionsContainer.classList.remove('hidden');
+    }
+
+    function attachCallHandlers(call) {
+      currentCall = call;
+
+      call.on('stream', (remoteStream) => {
+        statusText.innerText = 'Connected in Call!';
+        statusText.style.color = '#25D366';
+
+        // Check if incoming stream contains active video
+        const hasActiveVideo = remoteStream.getVideoTracks().some(track => track.enabled);
+
+        if (hasActiveVideo) {
+          videoWrapper.classList.remove('hidden');
+          remoteVideo.srcObject = remoteStream;
+          remoteVideo.play().catch(e => console.log('Autoplay playback caught:', e));
+        } else {
+          videoWrapper.classList.add('hidden');
+          remoteAudio.srcObject = remoteStream;
+          remoteAudio.play().catch(e => console.log('Autoplay playback caught:', e));
+        }
+
+        activeCallContainer.classList.remove('hidden');
+        callActionsContainer.classList.add('hidden');
+      });
+
+      call.on('close', () => {
+        resetCallUI('Call Ended');
+      });
+
+      call.on('error', () => {
+        resetCallUI('Call Error');
+      });
+    }
+
+    function makeCall(type) {
+      if (!selectedTargetId) return;
+
+      const isVideo = (type === 'video');
+      isVideoEnabled = isVideo;
+
+      if (localStream && localStream.getVideoTracks()[0]) {
+        localStream.getVideoTracks()[0].enabled = isVideo;
+      }
+
+      document.getElementById('toggle-cam-btn').innerText = isVideo ? 'Mute Video' : 'Unmute Video';
+
+      if (isVideo) {
+        videoWrapper.classList.remove('hidden');
+      } else {
+        videoWrapper.classList.add('hidden');
+      }
+
+      statusText.innerText = `Calling ${selectedTargetId}...`;
+      statusText.style.color = '#f0ad4e';
+
+      const call = peer.call(selectedTargetId, localStream);
+      attachCallHandlers(call);
+    }
+
+    function acceptCall() {
+      document.getElementById('incoming-modal').classList.add('hidden');
+      statusText.innerText = 'Connecting...';
+
+      incomingCall.answer(localStream);
+      attachCallHandlers(incomingCall);
+    }
+
+    function declineCall() {
+      document.getElementById('incoming-modal').classList.add('hidden');
+      statusText.innerText = 'Call Declined';
+      statusText.style.color = '#d9534f';
+      if (incomingCall) incomingCall.close();
+    }
+
+    function toggleCamera() {
+      if (localStream) {
+        const videoTrack = localStream.getVideoTracks()[0];
+        if (videoTrack) {
+          isVideoEnabled = !isVideoEnabled;
+          videoTrack.enabled = isVideoEnabled;
+
+          if (isVideoEnabled) {
+            videoWrapper.classList.remove('hidden');
+          }
+
+          document.getElementById('toggle-cam-btn').innerText = isVideoEnabled ? 'Mute Video' : 'Unmute Video';
+        }
+      }
+    }
+
+    function toggleMic() {
+      if (localStream) {
+        const audioTrack = localStream.getAudioTracks()[0];
+        if (audioTrack) {
+          isAudioEnabled = !isAudioEnabled;
+          audioTrack.enabled = isAudioEnabled;
+          document.getElementById('toggle-mic-btn').innerText = isAudioEnabled ? 'Mute Mic' : 'Unmute Mic';
+        }
+      }
+    }
+
+    function endCall() {
+      if (currentCall) {
+        currentCall.close();
+      }
+      resetCallUI('Call Ended');
+    }
+
+    function resetCallUI(msg) {
+      statusText.innerText = msg;
+      statusText.style.color = '#d9534f';
+      remoteVideo.srcObject = null;
+      remoteAudio.srcObject = null;
+      activeCallContainer.classList.add('hidden');
+      videoWrapper.classList.add('hidden');
+
+      if (selectedTargetId) {
+        callActionsContainer.classList.remove('hidden');
+      }
+      currentCall = null;
+    }
+  </script>
+</body>
+</html>
